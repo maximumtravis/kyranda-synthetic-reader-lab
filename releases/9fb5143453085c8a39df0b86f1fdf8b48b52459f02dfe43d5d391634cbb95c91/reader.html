@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Fictional reader layout fixture</title>
+<style>*{box-sizing:border-box}html,body{margin:0}body{font:16px/1.6 system-ui,sans-serif;color:#202530;background:#fafafa}#reader{padding:16px;width:100%;max-width:1100px;margin:auto}nav{display:flex;flex-wrap:wrap;gap:8px}button,input,select{font:inherit;max-width:100%}input{width:100%}img{max-width:100%;height:auto}h1,h2,p{overflow-wrap:anywhere}footer{padding-top:20px;border-top:1px solid #999}.status{padding:12px}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #1768ae;outline-offset:2px}</style></head>
+<body><main id="reader"><h1>Fictional reader layout fixture</h1><p>This page contains invented test content only. It has no account, database or backend connection.</p>
+<nav aria-label="Fixture navigation"><button id="directory">Directory</button><button id="long">Long article</button><button id="image">Delayed image</button></nav>
+<p><label>Fictional collection <select id="collection"><option value="blue">Blue sample</option><option value="amber">Amber sample</option></select></label> <label>Sample episode <select id="episode"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label></p>
+<form><label for="search">Find fictional entries</label><input id="search" maxlength="80"><button type="button" id="search-button">Search</button></form>
+<div class="status" role="status" aria-live="polite">Waiting for the synthetic host.</div><section id="content" aria-label="Fictional content"></section><footer>End of fictional fixture. The surrounding host footer must follow this box.</footer></main>
+<script>
+(() => {
+ let session,origin,revision=0,applied=-1,generation=0,mode='directory';
+ const root=document.querySelector('#reader'),content=document.querySelector('#content'),status=document.querySelector('.status');
+ const emit=state=>{if(session)parent.postMessage({type:'codex-route',version:1,session,revision,state},origin);};
+ function render(next=mode){mode=next;generation++;content.replaceChildren();const heading=document.createElement('h2');heading.textContent=mode==='article'?'Fictional test article':'Fictional test directory';content.append(heading);
+  if(mode==='article'){for(let i=0;i<50;i++){const p=document.createElement('p');p.textContent='Invented paragraph '+(i+1)+'. '+('This sentence exists only to exercise responsive wrapping and document height. '.repeat(5));content.append(p);}}
+  else{const term=document.querySelector('#search').value.toLowerCase(),max=Number(document.querySelector('#episode').value),group=document.querySelector('#collection').value;let count=0;for(let i=1;i<=max;i++){const label='Fictional '+group+' entry '+String(i).padStart(3,'0');if(term&&!label.toLowerCase().includes(term))continue;const p=document.createElement('p'),button=document.createElement('button');button.textContent=label;button.onclick=()=>{render('article');emit({mode,episode:max,collection:group});};p.append(button);content.append(p);count++;}if(!count){const p=document.createElement('p');p.textContent='No fictional entries match.';content.append(p);}}
+  status.textContent='Synthetic '+mode+' ready.';
+ }
+ document.querySelector('#directory').onclick=()=>{document.querySelector('#search').value='';render('directory');emit({mode});};
+ document.querySelector('#long').onclick=()=>{render('article');emit({mode});};
+ document.querySelector('form').onsubmit=e=>{e.preventDefault();render('directory');};
+ document.querySelector('#search').oninput=()=>render('directory');document.querySelector('#search-button').onclick=()=>render('directory');
+ document.querySelector('#search').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();render('directory');}};
+ document.querySelector('#episode').onchange=()=>render('directory');document.querySelector('#collection').onchange=()=>render('directory');
+ document.querySelector('#image').onclick=()=>{const token=generation;setTimeout(()=>{if(token!==generation)return;const img=document.createElement('img');img.alt='Fictional tall test rectangle';img.width=200;img.src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="700"><rect width="200" height="700" fill="#abc"/></svg>');content.append(img);},100);};
+ addEventListener('message',event=>{const m=event.data;if(event.source!==parent||m?.version!==1)return;
+  if(m.type==='codex-init'&&!session&&typeof m.session==='string'&&m.session.length>0&&m.session.length<=200){session=m.session;origin=event.origin;revision=Number.isSafeInteger(m.revision)?m.revision:0;applied=revision;render(m.initial?.mode==='article'?'article':'directory');return;}
+  if(!session||event.origin!==origin||m.session!==session||m.type!=='codex-sync'||!Number.isSafeInteger(m.revision)||m.revision<revision)return;
+  if(m.phase!=='loading'&&m.phase!=='ready')return;if(m.revision>revision){revision=m.revision;generation++;content.replaceChildren();status.textContent='Synthetic location loading.';}
+  if(m.phase==='ready'&&applied<revision){applied=revision;render(m.initial?.mode==='article'?'article':'directory');}
+ });
+ parent.postMessage({type:'codex-ready',version:1},'*');
+})();
+</script>
+<script>
+// Appended to the confirmed reader document. No renderer or security code changes.
+(() => {
+  let session, origin, sequence = 0, pending = 0, disposed = false, last = '';
+  const root = document.querySelector('#reader');
+  if (!root || !window.ResizeObserver) return; // Keep ordinary iframe scrolling.
+  function measure() {
+    pending = 0;
+    if (disposed || !session) return;
+    const height = Math.ceil(root.getBoundingClientRect().height) + 2;
+    const width = window.innerWidth;
+    const key = `${width}:${height}`;
+    if (!Number.isFinite(height) || height < 1 || key === last) return;
+    last = key;
+    window.parent.postMessage({type:'codex-content-height',version:1,session,
+      sequence:++sequence,width,height}, origin);
+  }
+  const schedule = () => {
+    if (!disposed && !pending) pending = requestAnimationFrame(measure);
+  };
+  function initialize(event) {
+    const m = event.data;
+    if (event.source !== window.parent || m?.type !== 'codex-init' || m.version !== 1 ||
+        typeof m.session !== 'string' || !m.session || m.session.length > 200) return;
+    if (session && (m.session !== session || event.origin !== origin)) return;
+    session = m.session; origin = event.origin; schedule();
+  }
+  const observer = new ResizeObserver(schedule);
+  observer.observe(root);
+  window.addEventListener('message', initialize);
+  window.addEventListener('resize', schedule);
+  root.addEventListener('load', schedule, true);
+  root.addEventListener('error', schedule, true);
+  root.addEventListener('toggle', schedule, true);
+  document.fonts?.ready.then(schedule);
+  function cleanup(event) {
+    if (event.persisted) return; // Retain observers across browser back/forward cache.
+    disposed = true;
+    observer.disconnect(); cancelAnimationFrame(pending);
+    window.removeEventListener('message', initialize);
+    window.removeEventListener('resize', schedule);
+    root.removeEventListener('load', schedule, true);
+    root.removeEventListener('error', schedule, true);
+    root.removeEventListener('toggle', schedule, true);
+    window.removeEventListener('pagehide', cleanup);
+    window.removeEventListener('pageshow', schedule);
+  }
+  window.addEventListener('pagehide', cleanup);
+  window.addEventListener('pageshow', schedule);
+})();
+
+</script>
+</body></html>
