@@ -1,0 +1,14 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Fictional reader hosting acceptance</title><style>body{margin:0;font:16px system-ui}header{padding:12px}button{font:inherit;margin:4px}#shell{max-width:100%;margin:auto}footer{height:100px;background:#ddd}output{display:block;overflow-wrap:anywhere}</style><script src="synthetic-host.js"></script></head><body><header><h1>Fictional reader hosting acceptance</h1><p>Invented content only. No Wix or production data access.</p><button id="narrow">320 px</button><button id="wide">1240 px</button><button id="restore-long">Restore long</button><button id="restore-directory">Restore directory</button><button id="stale">Stale restore</button><button id="forged">Forged height</button><output id="metrics">Waiting</output></header><div id="shell" style="width:1240px"><kyranda-content-host id="host"></kyranda-content-host><footer id="outer-footer">Fictional surrounding footer</footer></div><script type="module">
+import {createCodexContentPort} from './synthetic-port.js';
+const element=document.querySelector('#host'),shell=document.querySelector('#shell'),footer=document.querySelector('#outer-footer'),output=document.querySelector('#metrics');
+const session='fictional-hosting-check';let revision=0,ready=false;
+const port=createCodexContentPort({setAttribute:(n,v)=>element.setAttribute(n,v),on:(n,f)=>element.addEventListener(n,f)});
+function measure(){const b=element.getBoundingClientRect(),f=footer.getBoundingClientRect();output.textContent=JSON.stringify({ready,width:Math.round(b.width),height:Math.round(b.height),footerGap:Math.round(f.top-b.bottom),revision});}
+port.onMessage(({data:m})=>{if(m.type==='codex-ready'){ready=true;port.postMessage({type:'codex-init',version:1,session,revision,initial:{mode:'directory'}});measure();}});
+new ResizeObserver(measure).observe(element);setInterval(measure,500);
+document.querySelector('#narrow').onclick=()=>{shell.style.width='320px';measure();};document.querySelector('#wide').onclick=()=>{shell.style.width='1240px';measure();};
+function restore(mode){port.postMessage({type:'codex-sync',version:1,session,revision:++revision,phase:'ready',initial:{mode}});}
+document.querySelector('#restore-long').onclick=()=>restore('article');document.querySelector('#restore-directory').onclick=()=>restore('directory');
+document.querySelector('#stale').onclick=()=>port.postMessage({type:'codex-sync',version:1,session,revision:Math.max(0,revision-1),phase:'ready',initial:{mode:'article'}});
+document.querySelector('#forged').onclick=()=>window.postMessage({type:'codex-content-height',version:1,session,sequence:999999,height:1,width:element.clientWidth},'*');
+</script></body></html>
