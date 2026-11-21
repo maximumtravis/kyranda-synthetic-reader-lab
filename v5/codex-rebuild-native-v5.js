@@ -5,9 +5,11 @@ const KYRANDA_V5_MARKUP = "\n  <a class=\"skip-link\" href=\"#main-content\">Ski
 
 // The native Wix element is stretched to full width with 40px desktop margins.
 // Follow the Wix wrapper width instead of offsetting from its former 980px grid.
-// The inner #reader remains capped at 1800px for comfortable long-form reading.
+// On extra-wide displays, give all three columns more room while retaining a
+// readable centered maximum; smaller desktop and mobile widths stay fluid.
 const KYRANDA_V5_LAYOUT_OVERRIDE = `
 :host {position:relative;left:0 !important;transform:none !important;width:100% !important;max-width:none !important}
+#reader {max-width:2600px}
 @media(max-width:650px){:host{left:12px !important;width:calc(100vw - 24px) !important}}
 `;
 
