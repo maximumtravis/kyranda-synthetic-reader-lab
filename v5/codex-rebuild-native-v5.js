@@ -10,7 +10,7 @@ const KYRANDA_V5_MARKUP = "\n  <a class=\"skip-link\" href=\"#main-content\">Ski
 const KYRANDA_V5_LAYOUT_OVERRIDE = `
 :host {position:relative;left:0 !important;transform:none !important;width:100% !important;max-width:none !important}
 #reader {max-width:2600px}
-@media(max-width:650px){:host{left:12px !important;width:calc(100vw - 24px) !important}}
+
 `;
 
 class KyrandaCodexNativeV5 extends HTMLElement {
