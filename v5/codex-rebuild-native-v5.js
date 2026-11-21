@@ -7,8 +7,8 @@ const KYRANDA_V5_MARKUP = "\n  <a class=\"skip-link\" href=\"#main-content\">Ski
 // that grid visually, while staying in normal flow so Wix can grow the page.
 // The 24px desktop gutters keep the breakout inside the viewport scrollbar.
 const KYRANDA_V5_LAYOUT_OVERRIDE = `
-:host {position:relative;left:50%;transform:translateX(-50%);width:min(1400px,calc(100vw - 48px));max-width:none}
-@media(max-width:650px){:host{width:calc(100vw - 24px)}}
+:host {position:relative;left:50%;transform:translateX(-50%);width:min(1400px,calc(100vw - 48px)) !important;max-width:none !important}
+@media(max-width:650px){:host{width:calc(100vw - 24px) !important}}
 `;
 
 class KyrandaCodexNativeV5 extends HTMLElement {
