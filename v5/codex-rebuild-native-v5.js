@@ -50,6 +50,7 @@ const PROTOCOL = 'kyranda-codex-rebuild-stage-v1';
 let serial = 0;
 const inFlight = new Map();
 host._acceptResult = message => {
+  if (abort.signal.aborted) return false;
   if(message?.protocol !== PROTOCOL || message.kind !== 'result' ||
      !Number.isSafeInteger(message.id))return false;
   const request = inFlight.get(message.id);
@@ -60,6 +61,7 @@ host._acceptResult = message => {
   return true;
 };
 const askPage = (action,payload) => new Promise((resolve,reject)=>{
+  if (abort.signal.aborted) { reject(new Error('Reader disconnected')); return; }
   const id=++serial;
   const timer=setTimeout(()=>{
     inFlight.delete(id);
@@ -69,6 +71,13 @@ const askPage = (action,payload) => new Promise((resolve,reject)=>{
   inFlight.set(id,{resolve,reject,timer});
   host.dispatchEvent(new CustomEvent('codex-request', {detail:{protocol:PROTOCOL,kind:'request',id,action,payload}}));
 });
+abort.signal.addEventListener('abort', () => {
+  for (const request of inFlight.values()) {
+    clearTimeout(request.timer);
+    request.reject(new Error('Reader disconnected'));
+  }
+  inFlight.clear();
+}, {once:true});
 const byId = id => root.getElementById(id);
 const campaignControl = byId('campaign');
 const episodeControl = byId('episode');
@@ -394,6 +403,7 @@ async function initialize() {
     updateUrl(true);
     await render();
   } catch {
+    if (abort.signal.aborted) return;
     showAccessUnavailable();
   }
 }
@@ -404,6 +414,7 @@ async function loadEpisodes() {
   let response;
   try { response = await askPage('episodes',{campaign:requestedCampaign}); }
   catch (error) {
+    if (abort.signal.aborted) return false;
     if (episodeRequest !== lastEpisodeRequest || requestedCampaign !== state.campaign) return false;
     throw error;
   }
@@ -446,6 +457,7 @@ async function render() {
     });
     status.textContent = `${result.entries.length} visible articles · ${state.campaign === 'main' ? 'Main Campaign' : 'Parental Advisory'} through Episode ${state.episode}.`;
   } catch (error) {
+    if (abort.signal.aborted) return;
     host._emitDiagnostic('read-render-error', {errorName:error?.name || 'Error'});
     if (requestId === lastRequest) showAccessUnavailable();
   }
