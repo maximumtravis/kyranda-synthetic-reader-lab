@@ -10,16 +10,18 @@ const KYRANDA_V5_MARKUP = "\n  <a class=\"skip-link\" href=\"#main-content\">Ski
 const KYRANDA_V5_LAYOUT_OVERRIDE = `
 :host {position:relative;left:0 !important;transform:none !important;width:100% !important;max-width:none !important}
 #reader {max-width:2600px}
-
 `;
 
+// A response belongs to one element instance, even when Wix remounts a reader
+// before an earlier asynchronous backend call returns.
+let kyrandaV5InstanceSerial = 0;
 class KyrandaCodexNativeV5 extends HTMLElement {
   static get observedAttributes() { return ['codex-ready', 'codex-result']; }
   constructor() {
     super();
     this._root = this.attachShadow({mode:'open'});
     this._started = false;
-    this._diagnosticInstance = Date.now();
+    this._diagnosticInstance = Date.now() * 1024 + (++kyrandaV5InstanceSerial % 1024);
   }
   _emitDiagnostic(phase, details = {}) {
     this.dispatchEvent(new CustomEvent('codex-diagnostic', {detail:{
@@ -62,7 +64,9 @@ const inFlight = new Map();
 host._acceptResult = message => {
   if (abort.signal.aborted) return false;
   if(message?.protocol !== PROTOCOL || message.kind !== 'result' ||
-     !Number.isSafeInteger(message.id))return false;
+     !Number.isSafeInteger(message.id) ||
+     !Number.isSafeInteger(message.instance) ||
+     message.instance !== host._diagnosticInstance)return false;
   const request = inFlight.get(message.id);
   if(!request)return false;
   clearTimeout(request.timer);
@@ -85,7 +89,9 @@ const askPage = (action,payload) => new Promise((resolve,reject)=>{
   },REQUEST_TIMEOUT_MS);
   inFlight.set(id,{resolve,reject,timer,action,startedAt});
   host._emitDiagnostic('request-sent', {id,action});
-  host.dispatchEvent(new CustomEvent('codex-request', {detail:{protocol:PROTOCOL,kind:'request',id,action,payload}}));
+  host.dispatchEvent(new CustomEvent('codex-request', {detail:{
+    protocol:PROTOCOL,kind:'request',instance:host._diagnosticInstance,id,action,payload
+  }}));
 });
 // Wix can miss the first event immediately after onReady registration. Retry
 // only an unacknowledged, read-only request; never retry an explicit denial.
