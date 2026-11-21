@@ -9,6 +9,13 @@ class KyrandaCodexNativeV5 extends HTMLElement {
     super();
     this._root = this.attachShadow({mode:'open'});
     this._started = false;
+    this._diagnosticInstance = Date.now();
+  }
+  _emitDiagnostic(phase, details = {}) {
+    this.dispatchEvent(new CustomEvent('codex-diagnostic', {detail:{
+      protocol:'kyranda-codex-rebuild-stage-v1',
+      phase, instance:this._diagnosticInstance, ...details
+    }}));
   }
   connectedCallback() {
     if (this.getAttribute('codex-ready') === '1') this._start();
@@ -18,8 +25,13 @@ class KyrandaCodexNativeV5 extends HTMLElement {
     if (name !== 'codex-result' || !value || oldValue === value) return;
     try {
       const message = JSON.parse(value);
-      this._acceptResult?.(message);
-    } catch { /* Ignore malformed or obsolete responses. */ }
+      const matched = this._acceptResult?.(message) === true;
+      this._emitDiagnostic('attribute-observed', {
+        id:message?.id, characters:value.length, matched
+      });
+    } catch {
+      this._emitDiagnostic('attribute-parse-failed', {characters:value.length});
+    }
   }
   _start() {
     if (this._started) return;
@@ -27,6 +39,7 @@ class KyrandaCodexNativeV5 extends HTMLElement {
     this._root.innerHTML = '<style>' + KYRANDA_V5_CSS + '</style>' + KYRANDA_V5_MARKUP;
     this._abort = new AbortController();
     this._mount(this._root, this._abort);
+    this._emitDiagnostic('started');
   }
   _mount(root, abort) {
     const host = this;
@@ -38,16 +51,21 @@ let serial = 0;
 const inFlight = new Map();
 host._acceptResult = message => {
   if(message?.protocol !== PROTOCOL || message.kind !== 'result' ||
-     !Number.isSafeInteger(message.id))return;
+     !Number.isSafeInteger(message.id))return false;
   const request = inFlight.get(message.id);
-  if(!request)return;
+  if(!request)return false;
   clearTimeout(request.timer);
   inFlight.delete(message.id);
   request.resolve(message.value);
+  return true;
 };
 const askPage = (action,payload) => new Promise((resolve,reject)=>{
   const id=++serial;
-  const timer=setTimeout(()=>{inFlight.delete(id);reject(new Error('Stage timed out'));},8000);
+  const timer=setTimeout(()=>{
+    inFlight.delete(id);
+    host._emitDiagnostic('request-timeout', {id, action});
+    reject(new Error('Stage timed out'));
+  },8000);
   inFlight.set(id,{resolve,reject,timer});
   host.dispatchEvent(new CustomEvent('codex-request', {detail:{protocol:PROTOCOL,kind:'request',id,action,payload}}));
 });
@@ -423,8 +441,12 @@ async function render() {
     }
     if (result.article) renderArticle(result);
     else renderDirectory(result);
+    host._emitDiagnostic('read-render-complete', {
+      entryCount:result.entries.length, articlePresent:Boolean(result.article)
+    });
     status.textContent = `${result.entries.length} visible articles · ${state.campaign === 'main' ? 'Main Campaign' : 'Parental Advisory'} through Episode ${state.episode}.`;
-  } catch {
+  } catch (error) {
+    host._emitDiagnostic('read-render-error', {errorName:error?.name || 'Error'});
     if (requestId === lastRequest) showAccessUnavailable();
   }
 }
@@ -481,6 +503,7 @@ void initialize();
 
   }
   disconnectedCallback() {
+    this._emitDiagnostic('disconnected');
     this._abort?.abort();
     this._acceptResult = null;
     this._root.replaceChildren();
