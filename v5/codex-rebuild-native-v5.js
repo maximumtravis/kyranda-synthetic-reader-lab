@@ -317,6 +317,7 @@ function contextualLink(slug, label) {
 function appendContextualText(container, value, index, sourceSlug = '') {
   const content = String(value ?? '');
   if (!index || !content) { container.textContent = content; return; }
+  container.replaceChildren();
   const expression = index.pattern;
   expression.lastIndex = 0;
   const isWord = character => /[\p{L}\p{M}\p{N}_]/u.test(character);
