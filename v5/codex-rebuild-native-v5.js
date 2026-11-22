@@ -10,6 +10,21 @@ const KYRANDA_V5_MARKUP = "\n  <a class=\"skip-link\" href=\"#main-content\">Ski
 const KYRANDA_V5_LAYOUT_OVERRIDE = `
 :host {position:relative;left:0 !important;transform:none !important;width:100% !important;max-width:none !important}
 #reader {max-width:2600px}
+.sidebar-panel #toc {counter-reset:codex-section;padding-left:0;border-left:0}
+.sidebar-panel #toc li {counter-increment:codex-section;margin:0}
+.sidebar-panel #toc a {display:grid;grid-template-columns:2.2em minmax(0,1fr);gap:7px;
+  border-left:2px solid var(--line);padding:9px 8px 9px 10px;color:var(--ink)}
+.sidebar-panel #toc a::before {content:counter(codex-section,decimal-leading-zero);
+  color:var(--muted);font:11px/1.8 Arial,sans-serif}
+.sidebar-panel #toc a[aria-current="location"] {border-left-color:var(--accent);
+  background:var(--panel);color:var(--accent)}
+.article-body a.context-link,.intro a.context-link,.infobox a.context-link,
+.directory a.context-link {color:#76502e;text-decoration:underline;
+  text-decoration-color:#c6aa83;text-underline-offset:3px;text-decoration-thickness:1px}
+.article-body a.context-link:hover,.intro a.context-link:hover,
+.infobox a.context-link:hover,.directory a.context-link:hover {
+  text-decoration-color:currentColor;background:#f0e9d8}
+@media(max-width:820px){.sidebar-panel #toc a{padding-block:11px}}
 `;
 
 // A response belongs to one element instance, even when Wix remounts a reader
@@ -259,6 +274,67 @@ function articleLink(slug, label) {
   return link;
 }
 
+// This list is supplied by the authorized episode-aware read. Never resolve
+// text against a global index: later-episode names must not become links.
+function contextualIndex(result) {
+  const labels = new Map();
+  for (const entry of result.entries || []) {
+    if (!/^r-[a-f0-9]{32}$/.test(entry.slug || '')) continue;
+    // Accept only explicit, already-visible titles and approved aliases. Do
+    // not fabricate synonyms or infer an identity from conversational prose.
+    const names = [entry.title, ...(Array.isArray(entry.aliases) ? entry.aliases : [])];
+    for (const name of names) {
+      if (typeof name !== 'string' || name.trim() !== name ||
+          name.length < 3 || name.length > 120) continue;
+      const key = name.toLowerCase();
+      if (!labels.has(key)) labels.set(key, entry);
+      else if (labels.get(key)?.slug !== entry.slug) labels.set(key, null);
+    }
+  }
+  const unique = [...labels.entries()].filter(([,entry]) => entry);
+  if (!unique.length) return null;
+  unique.sort((a,b) => b[0].length - a[0].length || a[0].localeCompare(b[0]));
+  const escapeRegex = word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return {labels, pattern:new RegExp(unique.map(([name]) => escapeRegex(name)).join('|'), 'giu')};
+}
+
+function contextualLink(slug, label) {
+  const anchor = element('a', 'context-link', label);
+  const url = encodeState();
+  url.searchParams.set('slug', slug);
+  url.searchParams.delete('search');
+  anchor.href = String(url);
+  anchor.addEventListener('click', event => {
+    // Let the browser handle open-in-new-tab, copying the URL and shortcuts.
+    if (event.defaultPrevented || (event.button != null && event.button !== 0) ||
+        event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    selectArticle(slug);
+  });
+  return anchor;
+}
+
+function appendContextualText(container, value, index, sourceSlug = '') {
+  const content = String(value ?? '');
+  if (!index || !content) { container.textContent = content; return; }
+  const expression = index.pattern;
+  expression.lastIndex = 0;
+  const isWord = character => /[\p{L}\p{M}\p{N}_]/u.test(character);
+  let position = 0;
+  for (const match of content.matchAll(expression)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    const target = index.labels.get(match[0].toLowerCase());
+    if (!target || target.slug === sourceSlug ||
+        (start > 0 && isWord(content[start - 1])) ||
+        (end < content.length && isWord(content[end]))) continue;
+    if (start > position) container.append(content.slice(position, start));
+    container.append(contextualLink(target.slug, match[0]));
+    position = end;
+  }
+  if (position < content.length) container.append(content.slice(position));
+}
+
 function renderDirectory(result) {
   breadcrumbs.textContent = state.campaign === 'main' ? 'Main Campaign' : 'Parental Advisory';
   title.textContent = 'All articles';
@@ -269,6 +345,7 @@ function renderDirectory(result) {
   tocCollapse.hidden = true;
   directoryNav.hidden = false;
   const groups = new Map();
+  const linkIndex = contextualIndex(result);
   for (const item of result.entries) {
     const topic = item.category || 'Other';
     if (!groups.has(topic)) groups.set(topic, []);
@@ -289,7 +366,11 @@ function renderDirectory(result) {
     const makeRow = item => {
       const row = element('li');
       row.append(articleLink(item.slug, item.title));
-      if (item.summary) row.append(element('p', '', item.summary));
+      if (item.summary) {
+        const summary = element('p');
+        appendContextualText(summary, item.summary, linkIndex, item.slug);
+        row.append(summary);
+      }
       return row;
     };
     function showRows(expanded) {
@@ -327,7 +408,7 @@ function renderDirectory(result) {
   related.replaceChildren();
 }
 
-function renderInfobox(article) {
+function renderInfobox(article, linkIndex) {
   infobox.replaceChildren(element('h3', '', article.title));
   infobox.hidden = false;
   const portrait = article.media?.[0];
@@ -345,17 +426,20 @@ function renderInfobox(article) {
   const facts = [{label: 'Article type', value: article.category}, ...(article.infobox || [])];
   const definition = element('dl');
   for (const fact of facts) {
-    definition.append(element('dt', '', fact.label), element('dd', '', fact.value));
+    const description = element('dd');
+    appendContextualText(description, fact.value, linkIndex, article.slug);
+    definition.append(element('dt', '', fact.label), description);
   }
   infobox.append(definition);
 }
 
 function renderArticle(result) {
   const article = result.article;
+  const linkIndex = contextualIndex(result);
   breadcrumbs.textContent = `${state.campaign === 'main' ? 'Main Campaign' : 'Parental Advisory'} / ${article.category}`;
   category.textContent = article.category;
   title.textContent = article.title;
-  intro.textContent = article.summary;
+  appendContextualText(intro, article.summary, linkIndex, article.slug);
   directoryNav.hidden = true;
   tocCollapse.hidden = false;
   directoryShortlist.replaceChildren();
@@ -366,9 +450,14 @@ function renderArticle(result) {
     heading.id = section.id;
     container.append(heading);
     for (const block of section.blocks) {
-      if (block.type === 'paragraph') container.append(element('p', '', block.text));
+      if (block.type === 'paragraph') {
+        const paragraph = element('p');
+        appendContextualText(paragraph, block.text, linkIndex, article.slug);
+        container.append(paragraph);
+      }
       if (block.type === 'quote') {
-        const quote = element('blockquote', '', block.text);
+        const quote = element('blockquote');
+        appendContextualText(quote, block.text, linkIndex, article.slug);
         quote.append(element('cite', '', ` — ${block.speaker}${block.sourceEpisode ? ` (Episode ${block.sourceEpisode})` : ''}`));
         container.append(quote);
       }
@@ -394,7 +483,11 @@ function renderArticle(result) {
       if (!values.length) continue;
       items.append(element('h4', '', label));
       const list = element('ul');
-      for (const value of values) list.append(element('li', '', value));
+      for (const value of values) {
+        const item = element('li');
+        appendContextualText(item, value, linkIndex, article.slug);
+        list.append(item);
+      }
       items.append(list);
     }
     sections.push(items);
@@ -416,11 +509,14 @@ function renderArticle(result) {
   }));
   activeHeadingIds = tocLinks.map(item => item.id);
   markActiveHeading();
-  renderInfobox(article);
+  renderInfobox(article, linkIndex);
   related.replaceChildren();
   const unique = new Map();
+  const visible = new Map(result.entries.map(entry => [entry.slug, entry]));
   for (const entry of [...(article.related || []), ...(article.relationships || [])]) {
-    if (!unique.has(entry.slug || entry.target)) unique.set(entry.slug || entry.target, entry.title);
+    const slug = entry.slug || entry.target;
+    if (visible.has(slug) && slug !== article.slug && !unique.has(slug))
+      unique.set(slug, visible.get(slug).title);
   }
   if (unique.size) {
     related.append(element('h3', '', 'Related articles'));
