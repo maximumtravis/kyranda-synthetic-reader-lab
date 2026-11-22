@@ -41,6 +41,22 @@ const KYRANDA_V5_LAYOUT_OVERRIDE = `
   padding:0 0 12px;border-bottom:1px solid var(--line)}
 .infobox.compact-character dd:last-child {border-bottom:0;padding-bottom:7px}
 .infobox.compact-character .alias-section {padding:15px 16px}
+.sidebar-panel #toc.toc-episode-groups {border:0;padding:0;counter-reset:none}
+.sidebar-panel #toc.toc-episode-groups>li {counter-increment:none;margin:0}
+.sidebar-panel #toc .toc-episode-details {border-bottom:1px solid var(--line)}
+.sidebar-panel #toc .toc-episode-details>summary {display:flex;align-items:center;
+  justify-content:space-between;gap:5px;margin:0;padding:10px 5px;
+  color:var(--ink);font:700 12px/1.5 Arial,sans-serif;list-style-position:inside}
+.sidebar-panel #toc .toc-episode-details>summary:hover,
+.sidebar-panel #toc .toc-episode-details[open]>summary {background:#f1ece2;color:var(--accent)}
+.sidebar-panel #toc .toc-episode-count {font:11px/1.4 Arial,sans-serif;
+  color:var(--muted);white-space:nowrap}
+.sidebar-panel #toc .toc-episode-links {counter-reset:codex-section;
+  margin:0 0 6px 6px;padding:0;border:0}
+.sidebar-panel #toc .toc-episode-links li {counter-increment:codex-section}
+.sidebar-panel #toc .toc-episode-links a {font-size:12px;padding:8px 5px 8px 8px}
+.sidebar-panel #toc .toc-extra a {font-weight:700;margin-top:8px}
+.sidebar-panel #toc .toc-extra a::before {content:'•';font-size:13px}
 @media(max-width:820px){.sidebar-panel #toc a{padding-block:11px}}
 `;
 
@@ -225,6 +241,8 @@ let lastRequest = 0;
 let lastEpisodeRequest = 0;
 let searchTimer;
 let activeHeadingIds = [];
+let activeTocId = '';
+const tocEpisodeGroups = new Map();
 const compactNavigation = window.matchMedia('(max-width:820px)');
 
 function setNavigationForViewport() {
@@ -409,6 +427,9 @@ function renderDirectory(result) {
   intro.textContent = `Discover articles available through Episode ${state.episode}.`;
   toc.replaceChildren();
   activeHeadingIds = [];
+  activeTocId = '';
+  tocEpisodeGroups.clear();
+  toc.className = '';
   tocCollapse.hidden = true;
   directoryNav.hidden = false;
   const groups = new Map();
@@ -519,6 +540,68 @@ function renderInfobox(article, linkIndex) {
   }
 }
 
+function createTocLink(item) {
+  const li = element('li');
+  const anchor = element('a', '', item.heading);
+  anchor.href = `#${item.id}`;
+  anchor.addEventListener('click', event => {
+    event.preventDefault();
+    root.getElementById(item.id)?.scrollIntoView({behavior:'smooth', block:'start'});
+  });
+  li.append(anchor);
+  return li;
+}
+
+function renderArticleNavigation(article, tocLinks) {
+  tocEpisodeGroups.clear();
+  activeTocId = '';
+  const sections = article.tableOfContents || [];
+  const character = ['Player character','Non-player character','Historical character']
+    .includes(article.category);
+  const hasVerifiedEpisodes = sections.every(item =>
+    Number.isSafeInteger(item.firstEpisode) && item.firstEpisode >= 1 &&
+    item.firstEpisode <= state.episode);
+  if (!character || sections.length < 8 || !hasVerifiedEpisodes) {
+    toc.className = '';
+    toc.replaceChildren(...tocLinks.map(createTocLink));
+    return;
+  }
+  const byEpisode = new Map();
+  for (const item of sections) {
+    if (!byEpisode.has(item.firstEpisode)) byEpisode.set(item.firstEpisode, []);
+    byEpisode.get(item.firstEpisode).push(item);
+  }
+  const rows = [];
+  for (const [episode, items] of [...byEpisode.entries()].sort((a,b) => a[0]-b[0])) {
+    const row = element('li', 'toc-episode');
+    const disclosure = element('details', 'toc-episode-details');
+    const summary = element('summary', '', `Episode ${episode}`);
+    summary.append(element('span','toc-episode-count',
+      `${items.length} ${items.length === 1 ? 'section' : 'sections'}`));
+    const links = element('ol', 'toc-episode-links');
+    links.append(...items.map(item => {
+      tocEpisodeGroups.set(item.id, disclosure);
+      return createTocLink(item);
+    }));
+    disclosure.append(summary, links);
+    disclosure.addEventListener('toggle', () => {
+      if (!disclosure.open) return;
+      for (const other of new Set(tocEpisodeGroups.values())) {
+        if (other !== disclosure) other.open = false;
+      }
+    });
+    row.append(disclosure);
+    rows.push(row);
+  }
+  for (const item of tocLinks.slice(sections.length)) {
+    const row = createTocLink(item);
+    row.className = 'toc-extra';
+    rows.push(row);
+  }
+  toc.className = 'toc-episode-groups';
+  toc.replaceChildren(...rows);
+}
+
 function renderArticle(result) {
   const article = result.article;
   const linkIndex = contextualIndex(result);
@@ -582,17 +665,7 @@ function renderArticle(result) {
   articleBody.replaceChildren(...sections);
   const tocLinks = [...article.tableOfContents];
   if (current.length || former.length) tocLinks.push({id: 'notable-items', heading: 'Notable items'});
-  toc.replaceChildren(...tocLinks.map(item => {
-    const li = element('li');
-    const anchor = element('a', '', item.heading);
-    anchor.href = `#${item.id}`;
-    anchor.addEventListener('click', event => {
-      event.preventDefault();
-      root.getElementById(item.id)?.scrollIntoView({behavior: 'smooth', block: 'start'});
-    });
-    li.append(anchor);
-    return li;
-  }));
+  renderArticleNavigation(article, tocLinks);
   activeHeadingIds = tocLinks.map(item => item.id);
   markActiveHeading();
   renderInfobox(article, linkIndex);
@@ -617,6 +690,14 @@ function markActiveHeading() {
     if (heading && heading.getBoundingClientRect().top <= 155) active = id;
   }
   if (!active) active = activeHeadingIds[0] || '';
+  if (active && active !== activeTocId) {
+    const group = tocEpisodeGroups.get(active);
+    if (group && !group.open) {
+      for (const other of new Set(tocEpisodeGroups.values())) other.open = false;
+      group.open = true;
+    }
+    activeTocId = active;
+  }
   for (const anchor of toc.querySelectorAll('a')) {
     if (active && anchor.getAttribute('href') === `#${active}`)
       anchor.setAttribute('aria-current', 'location');
@@ -627,6 +708,9 @@ function markActiveHeading() {
 function clearPrivateView() {
   toc.replaceChildren();
   activeHeadingIds = [];
+  activeTocId = '';
+  tocEpisodeGroups.clear();
+  toc.className = '';
   directoryShortlist.replaceChildren();
   directoryNav.hidden = true;
   tocCollapse.hidden = true;
