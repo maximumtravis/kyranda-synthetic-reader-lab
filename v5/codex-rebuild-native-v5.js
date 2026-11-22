@@ -24,6 +24,22 @@ class KyrandaCodexNativeV5 extends HTMLElement {
     this._diagnosticInstance = Date.now() * 1024 + (++kyrandaV5InstanceSerial % 1024);
   }
   _emitDiagnostic(phase, details = {}) {
+    // Opt-in staging-only transport timing. Metadata never includes DTOs,
+    // tokens, article text, identities or a backend response body.
+    if (typeof location !== 'undefined' &&
+        new URLSearchParams(location.search).get('kcPerf') === '1') {
+      if (!this._timingStartedAt) this._timingStartedAt = Date.now();
+      if (!this._timingEvents) this._timingEvents = [];
+      this._timingEvents.push({
+        ms: Date.now() - this._timingStartedAt,
+        phase,
+        id: Number.isSafeInteger(details.id) ? details.id : null,
+        action: typeof details.action === 'string' ? details.action : null,
+        elapsedMs: Number.isFinite(details.elapsedMs) ? details.elapsedMs : null
+      });
+      this.setAttribute('data-codex-perf',
+        JSON.stringify(this._timingEvents.slice(-32)));
+    }
     this.dispatchEvent(new CustomEvent('codex-diagnostic', {detail:{
       protocol:'kyranda-codex-rebuild-stage-v1',
       phase, instance:this._diagnosticInstance, ...details
