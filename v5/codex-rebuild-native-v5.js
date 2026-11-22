@@ -45,12 +45,14 @@ const KYRANDA_V5_LAYOUT_OVERRIDE = `
 .sidebar-panel #toc.toc-episode-groups>li {counter-increment:none;margin:0}
 .sidebar-panel #toc .toc-episode-details {border-bottom:1px solid var(--line)}
 .sidebar-panel #toc .toc-episode-details>summary {display:flex;align-items:center;
-  justify-content:space-between;gap:5px;margin:0;padding:10px 5px;
+  gap:5px;margin:0;padding:10px 5px;
   color:var(--ink);font:700 12px/1.5 Arial,sans-serif;list-style-position:inside}
+.sidebar-panel #toc .toc-episode-details>summary::before {content:'▸';margin-right:3px}
+.sidebar-panel #toc .toc-episode-details[open]>summary::before {content:'▾'}
 .sidebar-panel #toc .toc-episode-details>summary:hover,
 .sidebar-panel #toc .toc-episode-details[open]>summary {background:#f1ece2;color:var(--accent)}
 .sidebar-panel #toc .toc-episode-count {font:11px/1.4 Arial,sans-serif;
-  color:var(--muted);white-space:nowrap}
+  color:var(--muted);white-space:nowrap;margin-left:auto}
 .sidebar-panel #toc .toc-episode-links {counter-reset:codex-section;
   margin:0 0 6px 6px;padding:0;border:0}
 .sidebar-panel #toc .toc-episode-links li {counter-increment:codex-section}
@@ -558,14 +560,22 @@ function renderArticleNavigation(article, tocLinks) {
   const sections = article.tableOfContents || [];
   const character = ['Player character','Non-player character','Historical character']
     .includes(article.category);
+  const verifiedCount = sections.filter(item =>
+    Number.isSafeInteger(item.firstEpisode) && item.firstEpisode >= 1 &&
+    item.firstEpisode <= state.episode).length;
+  // Visible-section counts only, for stage QA when Wix serves a stale projection.
+  toc.dataset.episodeEvidence = `${verifiedCount}/${sections.length}`;
   const hasVerifiedEpisodes = sections.every(item =>
     Number.isSafeInteger(item.firstEpisode) && item.firstEpisode >= 1 &&
     item.firstEpisode <= state.episode);
   if (!character || sections.length < 8 || !hasVerifiedEpisodes) {
+    toc.dataset.navigationMode = !character ? 'ordinary' :
+      sections.length < 8 ? 'short' : 'metadata-pending';
     toc.className = '';
     toc.replaceChildren(...tocLinks.map(createTocLink));
     return;
   }
+  toc.dataset.navigationMode = 'episodes';
   const byEpisode = new Map();
   for (const item of sections) {
     if (!byEpisode.has(item.firstEpisode)) byEpisode.set(item.firstEpisode, []);
