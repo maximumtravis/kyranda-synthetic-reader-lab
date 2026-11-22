@@ -30,6 +30,17 @@ const KYRANDA_V5_LAYOUT_OVERRIDE = `
 .infobox .alias-section ul {list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:7px}
 .infobox .alias-section li {font:13px/1.5 Georgia,serif;color:#594129;
   background:#eee5d4;border:1px solid #d7c9b3;border-radius:3px;padding:5px 9px}
+.infobox.compact-character h3 {padding-bottom:9px;border-bottom:0}
+.infobox .character-kind {margin:0;padding:0 12px 14px;background:#e7dfcf;
+  border-bottom:1px solid #c4b9a4;text-align:center;font:700 10px/1.5 Arial,sans-serif;
+  letter-spacing:.13em;text-transform:uppercase;color:#66543e}
+.infobox.compact-character dl {display:block;margin:0;padding:4px 16px 7px}
+.infobox.compact-character dt {font:700 10px/1.4 Arial,sans-serif;
+  text-transform:uppercase;letter-spacing:.1em;color:#615747;padding:12px 0 3px;border:0}
+.infobox.compact-character dd {font:15px/1.5 Georgia,serif;
+  padding:0 0 12px;border-bottom:1px solid var(--line)}
+.infobox.compact-character dd:last-child {border-bottom:0;padding-bottom:7px}
+.infobox.compact-character .alias-section {padding:15px 16px}
 @media(max-width:820px){.sidebar-panel #toc a{padding-block:11px}}
 `;
 
@@ -302,6 +313,33 @@ function visibleApprovedAliases(source, canonicalTitle = '') {
   return visible;
 }
 
+// Only concise, episode-authorized biographical fields belong in character
+// infoboxes. The full narrative, inventory, relationships and stats remain in
+// the main article. Absent or placeholder metadata is never inferred.
+const CHARACTER_FACT_FIELDS = [
+  {label:'Played by', names:['played by','player','portrayed by']},
+  {label:'Species', names:['species','race','ancestry']},
+  {label:'Class', names:['class','character class']},
+  {label:'Origin', names:['origin','hometown','place of origin']},
+  {label:'Affiliation', names:['affiliation','affiliations','group']},
+  {label:'First appearance', names:['first appearance','first seen','debut']}
+];
+function compactCharacterFacts(source) {
+  if (!Array.isArray(source)) return [];
+  const verified = new Map();
+  for (const item of source) {
+    if (!item || typeof item.label !== 'string' || typeof item.value !== 'string') continue;
+    const name = item.label.trim().replace(/\s+/g, ' ').toLowerCase();
+    const field = CHARACTER_FACT_FIELDS.find(candidate => candidate.names.includes(name));
+    if (!field || verified.has(field.label)) continue;
+    const value = item.value.trim();
+    if (!value || value.length > 220 || /^(?:n\/?a|unknown|tbd|none|null|undefined|not known|not available|[-—])$/i.test(value)) continue;
+    verified.set(field.label, value);
+  }
+  return CHARACTER_FACT_FIELDS.filter(field => verified.has(field.label))
+    .map(field => ({label:field.label, value:verified.get(field.label)}));
+}
+
 // This list is supplied by the authorized episode-aware read. Never resolve
 // text against a global index: later-episode names must not become links.
 function contextualIndex(result) {
@@ -438,8 +476,11 @@ function renderDirectory(result) {
 }
 
 function renderInfobox(article, linkIndex) {
+  const isCharacter = ['Player character','Non-player character','Historical character'].includes(article.category);
+  infobox.className = isCharacter ? 'infobox compact-character' : 'infobox';
   infobox.replaceChildren(element('h3', '', article.title));
   infobox.hidden = false;
+  if (isCharacter) infobox.append(element('p', 'character-kind', article.category));
   const portrait = article.media?.[0];
   if (portrait) {
     const figure = element('figure');
@@ -452,7 +493,19 @@ function renderInfobox(article, linkIndex) {
     if (credit) figure.append(element('figcaption', '', credit));
     infobox.append(figure);
   }
-  if (['Player character','Non-player character','Historical character'].includes(article.category)) {
+  const facts = isCharacter
+    ? compactCharacterFacts(article.infobox)
+    : [{label: 'Article type', value: article.category}, ...(article.infobox || [])];
+  if (facts.length) {
+    const definition = element('dl');
+    for (const fact of facts) {
+      const description = element('dd');
+      appendContextualText(description, fact.value, linkIndex, article.slug);
+      definition.append(element('dt', '', fact.label), description);
+    }
+    infobox.append(definition);
+  }
+  if (isCharacter) {
     const aliases = visibleApprovedAliases(article.aliases, article.title);
     if (aliases.length) {
       const section = element('section', 'alias-section');
@@ -464,14 +517,6 @@ function renderInfobox(article, linkIndex) {
       infobox.append(section);
     }
   }
-  const facts = [{label: 'Article type', value: article.category}, ...(article.infobox || [])];
-  const definition = element('dl');
-  for (const fact of facts) {
-    const description = element('dd');
-    appendContextualText(description, fact.value, linkIndex, article.slug);
-    definition.append(element('dt', '', fact.label), description);
-  }
-  infobox.append(definition);
 }
 
 function renderArticle(result) {
