@@ -24,6 +24,12 @@ const KYRANDA_V5_LAYOUT_OVERRIDE = `
 .article-body a.context-link:hover,.intro a.context-link:hover,
 .infobox a.context-link:hover,.directory a.context-link:hover {
   text-decoration-color:currentColor;background:#f0e9d8}
+.infobox .alias-section {padding:15px 16px;border-bottom:1px solid var(--line);background:#f8f3e9}
+.infobox .alias-section h4 {font:700 11px/1.4 Arial,sans-serif;
+  text-transform:uppercase;letter-spacing:.11em;color:#66553e;margin:0 0 9px}
+.infobox .alias-section ul {list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:7px}
+.infobox .alias-section li {font:13px/1.5 Georgia,serif;color:#594129;
+  background:#eee5d4;border:1px solid #d7c9b3;border-radius:3px;padding:5px 9px}
 @media(max-width:820px){.sidebar-panel #toc a{padding-block:11px}}
 `;
 
@@ -274,15 +280,37 @@ function articleLink(slug, label) {
   return link;
 }
 
+// In-world aliases are *not* the opaque r- URL aliases used by Wix. An alias
+// must be editorially approved, and its own first reveal episode must already
+// have been reached. Missing approval/reveal metadata fails closed.
+function visibleApprovedAliases(source, canonicalTitle = '') {
+  if (!Array.isArray(source)) return [];
+  const seen = new Set([String(canonicalTitle).toLowerCase()]);
+  const visible = [];
+  for (const record of source) {
+    if (!record || typeof record !== 'object' || record.approved !== true ||
+        !Number.isSafeInteger(record.revealEpisode) || record.revealEpisode < 1 ||
+        record.revealEpisode > state.episode) continue;
+    const name = record.name;
+    if (typeof name !== 'string' || name.trim() !== name ||
+        name.length < 2 || name.length > 120) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    visible.push(name);
+  }
+  return visible;
+}
+
 // This list is supplied by the authorized episode-aware read. Never resolve
 // text against a global index: later-episode names must not become links.
 function contextualIndex(result) {
   const labels = new Map();
   for (const entry of result.entries || []) {
     if (!/^r-[a-f0-9]{32}$/.test(entry.slug || '')) continue;
-    // Accept only explicit, already-visible titles and approved aliases. Do
-    // not fabricate synonyms or infer an identity from conversational prose.
-    const names = [entry.title, ...(Array.isArray(entry.aliases) ? entry.aliases : [])];
+    // Accept only explicit titles and vetted, episode-visible in-world aliases.
+    // Do not fabricate synonyms or infer identity from narrative prose.
+    const names = [entry.title, ...visibleApprovedAliases(entry.aliases, entry.title)];
     for (const name of names) {
       if (typeof name !== 'string' || name.trim() !== name ||
           name.length < 3 || name.length > 120) continue;
@@ -423,6 +451,18 @@ function renderInfobox(article, linkIndex) {
     const credit = [portrait.caption, portrait.artistName && `Art: ${portrait.artistName}`].filter(Boolean).join(' · ');
     if (credit) figure.append(element('figcaption', '', credit));
     infobox.append(figure);
+  }
+  if (['Player character','Non-player character','Historical character'].includes(article.category)) {
+    const aliases = visibleApprovedAliases(article.aliases, article.title);
+    if (aliases.length) {
+      const section = element('section', 'alias-section');
+      section.setAttribute('aria-label', 'Known aliases');
+      section.append(element('h4', '', 'Known aliases'));
+      const list = element('ul');
+      for (const alias of aliases) list.append(element('li', '', alias));
+      section.append(list);
+      infobox.append(section);
+    }
   }
   const facts = [{label: 'Article type', value: article.category}, ...(article.infobox || [])];
   const definition = element('dl');
