@@ -591,3 +591,8 @@ void initialize();
 if (!customElements.get('kyranda-codex-v5')) {
   customElements.define('kyranda-codex-v5', KyrandaCodexNativeV5);
 }
+// Wix Classic Editor sometimes persists the short tag on the hidden Test Site.
+// Keep it as a staging-only alias while preserving the canonical tag elsewhere.
+if (!customElements.get('kyranda-co')) {
+  customElements.define('kyranda-co', class KyrandaCodexV5StagingAlias extends KyrandaCodexNativeV5 {});
+}
