@@ -77,7 +77,9 @@ host._acceptResult = message => {
   request.resolve(message.value);
   return true;
 };
-const REQUEST_TIMEOUT_MS = 8000;
+// A cold Wix Velo backend can take longer than eight seconds to acknowledge.
+// Retrying that first request too early doubles the CMS verification work.
+const REQUEST_TIMEOUT_MS = 20000;
 const askPage = (action,payload) => new Promise((resolve,reject)=>{
   if (abort.signal.aborted) { reject(new Error('Reader disconnected')); return; }
   const id=++serial;
@@ -422,7 +424,7 @@ function showAccessUnavailable(error) {
   retry.type = 'button';
   retry.addEventListener('click', () => { void initialize(); });
   articleBody.replaceChildren(explanation, retry);
-  episodeControl.replaceChildren();
+  episodeControl.replaceChildren(element('option', '', 'Episodes unavailable'));
   campaignControl.disabled = true;
   episodeControl.disabled = true;
   searchControl.disabled = true;
@@ -433,11 +435,30 @@ function showAccessUnavailable(error) {
 
 async function initialize() {
   campaignControl.disabled = false;
-  episodeControl.disabled = false;
+  episodeControl.replaceChildren(element('option', '', 'Checking episodes…'));
+  episodeControl.disabled = true;
   searchControl.disabled = false;
   showLoadingView();
+  const initialRequestId = lastRequest;
   status.textContent = 'Checking staging access…';
   try {
+    // A deep link already names its episode. A successful authorized read
+    // includes the current maximumEpisode, so it can populate the selector
+    // without first waiting for a separate episode-choices RPC.
+    if (Number.isSafeInteger(state.episode) && state.episode >= 1) {
+      const result = await askPageResilient('read', {campaign:state.campaign,
+        episode:state.episode,slug:state.slug,search:state.search,category:''});
+      // A campaign switch, search, or browser Back can supersede this request.
+      if (abort.signal.aborted || initialRequestId !== lastRequest) return;
+      if (result?.status === 'ready' &&
+          Number.isSafeInteger(result.maximumEpisode) &&
+          result.maximumEpisode >= state.episode) {
+        populateEpisodeChoices(result.maximumEpisode);
+        updateUrl(true);
+        await render(result);
+        return;
+      }
+    }
     if (!await loadEpisodes()) return;
     updateUrl(true);
     await render();
@@ -445,6 +466,19 @@ async function initialize() {
     if (abort.signal.aborted) return;
     showAccessUnavailable(error);
   }
+}
+
+function populateEpisodeChoices(maximumEpisode) {
+  if (!Number.isSafeInteger(maximumEpisode) || maximumEpisode < 1)
+    throw new Error('Invalid episode availability');
+  if (state.episode < 1 || state.episode > maximumEpisode) state.episode = maximumEpisode;
+  episodeControl.replaceChildren(...Array.from({length: maximumEpisode}, (_, i) => {
+    const choice = element('option', '', `Episode ${i + 1}`);
+    choice.value = String(i + 1);
+    return choice;
+  }));
+  episodeControl.value = String(state.episode);
+  episodeControl.disabled = false;
 }
 
 async function loadEpisodes() {
@@ -459,22 +493,15 @@ async function loadEpisodes() {
   }
   // Rapid campaign/back navigation can make an older response arrive last.
   if (episodeRequest !== lastEpisodeRequest || requestedCampaign !== state.campaign) return false;
-  const maximumEpisode=response?.maximumEpisode;
-  if (!Number.isSafeInteger(maximumEpisode) || maximumEpisode < 1) throw new Error('Invalid episode availability');
-  if (state.episode < 1 || state.episode > maximumEpisode) state.episode = maximumEpisode;
-  episodeControl.replaceChildren(...Array.from({length: maximumEpisode}, (_, i) => {
-    const choice = element('option', '', `Episode ${i + 1}`);
-    choice.value = String(i + 1);
-    return choice;
-  }));
-  episodeControl.value = String(state.episode);
+  populateEpisodeChoices(response?.maximumEpisode);
   return true;
 }
 
-async function render() {
+async function render(preloadedResult) {
   const requestId = showLoadingView();
   try {
-    const result = await askPageResilient('read',{campaign:state.campaign,episode:state.episode,
+    const result = preloadedResult || await askPageResilient('read',{
+      campaign:state.campaign,episode:state.episode,
       slug:state.slug,search:state.search,category:''});
     if (requestId !== lastRequest) return;
     if (result.status !== 'ready') {
