@@ -615,6 +615,20 @@ function renderArticleNavigation(article, tocLinks) {
 function renderArticle(result) {
   const article = result.article;
   const linkIndex = contextualIndex(result);
+  const isCharacter = ['Player character','Non-player character','Historical character']
+    .includes(article.category);
+  const current = article.items?.current || [];
+  const former = article.items?.former || [];
+  const hasVerifiedInventory = current.length > 0 || former.length > 0;
+  // Preserve legacy editorial evidence until an approved possession summary
+  // exists. Never infer ownership from an event labelled only "documented".
+  const inventoryHistory = section => /^Inventory history:\s*\S/i.test(section.heading);
+  const visibleSections = isCharacter && hasVerifiedInventory
+    ? article.sections.filter(section => !inventoryHistory(section))
+    : article.sections;
+  const visibleContents = isCharacter && hasVerifiedInventory
+    ? article.tableOfContents.filter(section => !inventoryHistory(section))
+    : article.tableOfContents;
   breadcrumbs.textContent = `${state.campaign === 'main' ? 'Main Campaign' : 'Parental Advisory'} / ${article.category}`;
   category.textContent = article.category;
   title.textContent = article.title;
@@ -623,7 +637,7 @@ function renderArticle(result) {
   tocCollapse.hidden = false;
   directoryShortlist.replaceChildren();
   const sections = [];
-  for (const section of article.sections) {
+  for (const section of visibleSections) {
     const container = element('section', 'content-section');
     const heading = element('h3', '', section.heading);
     heading.id = section.id;
@@ -652,13 +666,14 @@ function renderArticle(result) {
     }
     sections.push(container);
   }
-  const current = article.items?.current || [];
-  const former = article.items?.former || [];
-  if (current.length || former.length) {
-    const items = element('section', 'content-section');
-    items.append(element('h3', '', 'Notable items'));
-    items.querySelector('h3').id = 'notable-items';
-    for (const [label, values] of [['Current', current], ['Former', former]]) {
+  if (hasVerifiedInventory) {
+    const items = element('section', 'content-section inventory-section');
+    const heading = element('h3', '', isCharacter ? 'Inventory' : 'Notable items');
+    heading.id = isCharacter ? 'inventory' : 'notable-items';
+    items.append(heading);
+    for (const [label, values] of (isCharacter
+      ? [['Currently possessed', current], ['Previously possessed', former]]
+      : [['Current', current], ['Former', former]])) {
       if (!values.length) continue;
       items.append(element('h4', '', label));
       const list = element('ul');
@@ -673,9 +688,10 @@ function renderArticle(result) {
   }
   if (!sections.length) sections.push(element('p', '', 'No article sections available at this episode.'));
   articleBody.replaceChildren(...sections);
-  const tocLinks = [...article.tableOfContents];
-  if (current.length || former.length) tocLinks.push({id: 'notable-items', heading: 'Notable items'});
-  renderArticleNavigation(article, tocLinks);
+  const tocLinks = [...visibleContents];
+  if (hasVerifiedInventory) tocLinks.push({id: isCharacter ? 'inventory' : 'notable-items',
+    heading: isCharacter ? 'Inventory' : 'Notable items'});
+  renderArticleNavigation({...article, tableOfContents: visibleContents}, tocLinks);
   activeHeadingIds = tocLinks.map(item => item.id);
   markActiveHeading();
   renderInfobox(article, linkIndex);
