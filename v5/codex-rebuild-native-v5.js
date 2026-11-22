@@ -16,7 +16,7 @@ const KYRANDA_V5_LAYOUT_OVERRIDE = `
 // before an earlier asynchronous backend call returns.
 let kyrandaV5InstanceSerial = 0;
 class KyrandaCodexNativeV5 extends HTMLElement {
-  static get observedAttributes() { return ['codex-ready', 'codex-result']; }
+  static get observedAttributes() { return ['codex-ready', 'codex-receipt', 'codex-result']; }
   constructor() {
     super();
     this._root = this.attachShadow({mode:'open'});
@@ -50,6 +50,15 @@ class KyrandaCodexNativeV5 extends HTMLElement {
   }
   attributeChangedCallback(name, oldValue, value) {
     if (name === 'codex-ready' && value === '1' && this.isConnected) this._start();
+    if (name === 'codex-receipt' && value && oldValue !== value) {
+      try {
+        const message = JSON.parse(value);
+        const matched = this._acceptReceipt?.(message) === true;
+        this._emitDiagnostic('receipt-observed', {id:message?.id, matched});
+      } catch {
+        this._emitDiagnostic('receipt-parse-failed');
+      }
+    }
     if (name !== 'codex-result' || !value || oldValue === value) return;
     try {
       const message = JSON.parse(value);
@@ -77,6 +86,22 @@ class KyrandaCodexNativeV5 extends HTMLElement {
 const PROTOCOL = 'kyranda-codex-rebuild-stage-v1';
 let serial = 0;
 const inFlight = new Map();
+host._acceptReceipt = message => {
+  if (abort.signal.aborted || message?.protocol !== PROTOCOL ||
+      message.kind !== 'receipt' ||
+      !Number.isSafeInteger(message.instance) ||
+      message.instance !== host._diagnosticInstance ||
+      !Number.isSafeInteger(message.id)) return false;
+  const request = inFlight.get(message.id);
+  if (!request) return false;
+  request.acknowledged = true;
+  clearTimeout(request.receiptTimer);
+  host._emitDiagnostic('request-received-by-wix', {
+    id: message.id, action:request.action,
+    elapsedMs:Date.now()-request.startedAt
+  });
+  return true;
+};
 host._acceptResult = message => {
   if (abort.signal.aborted) return false;
   if(message?.protocol !== PROTOCOL || message.kind !== 'result' ||
@@ -86,6 +111,7 @@ host._acceptResult = message => {
   const request = inFlight.get(message.id);
   if(!request)return false;
   clearTimeout(request.timer);
+  clearTimeout(request.receiptTimer);
   inFlight.delete(message.id);
   host._emitDiagnostic('request-acknowledged', {
     id:message.id,action:request.action,elapsedMs:Date.now()-request.startedAt
@@ -96,20 +122,37 @@ host._acceptResult = message => {
 // A cold Wix Velo backend can take longer than eight seconds to acknowledge.
 // Retrying that first request too early doubles the CMS verification work.
 const REQUEST_TIMEOUT_MS = 20000;
+// A receipt is transport-only, not authorization. A missed initial event can
+// be resent quickly with its original ID without repeating backend work.
+// The Wix page bridge deduplicates that ID until the result is delivered.
+const RECEIPT_RETRY_MS = 1400;
 const askPage = (action,payload) => new Promise((resolve,reject)=>{
   if (abort.signal.aborted) { reject(new Error('Reader disconnected')); return; }
   const id=++serial;
   const startedAt=Date.now();
   const timer=setTimeout(()=>{
+    clearTimeout(inFlight.get(id)?.receiptTimer);
     inFlight.delete(id);
     host._emitDiagnostic('request-timeout', {id,action,elapsedMs:Date.now()-startedAt});
     reject(new Error('Stage timed out'));
   },REQUEST_TIMEOUT_MS);
-  inFlight.set(id,{resolve,reject,timer,action,startedAt});
+  const detail={protocol:PROTOCOL,kind:'request',instance:host._diagnosticInstance,
+    id,action,payload};
+  const send=()=>host.dispatchEvent(new CustomEvent('codex-request',{detail}));
+  const request={resolve,reject,timer,action,startedAt,
+    acknowledged:false,receiptTimer:null,resends:0};
+  const retryReceipt=()=>{
+    if (abort.signal.aborted || inFlight.get(id)!==request || request.acknowledged ||
+        request.resends>=2)return;
+    request.resends++;
+    host._emitDiagnostic('request-retransmitted',{id,action,resends:request.resends});
+    send();
+    request.receiptTimer=setTimeout(retryReceipt,RECEIPT_RETRY_MS);
+  };
+  inFlight.set(id,request);
+  request.receiptTimer=setTimeout(retryReceipt,RECEIPT_RETRY_MS);
   host._emitDiagnostic('request-sent', {id,action});
-  host.dispatchEvent(new CustomEvent('codex-request', {detail:{
-    protocol:PROTOCOL,kind:'request',instance:host._diagnosticInstance,id,action,payload
-  }}));
+  send();
 });
 // Wix can miss the first event immediately after onReady registration. Retry
 // only an unacknowledged, read-only request; never retry an explicit denial.
@@ -125,6 +168,7 @@ async function askPageResilient(action,payload) {
 abort.signal.addEventListener('abort', () => {
   for (const request of inFlight.values()) {
     clearTimeout(request.timer);
+    clearTimeout(request.receiptTimer);
     request.reject(new Error('Reader disconnected'));
   }
   inFlight.clear();
@@ -600,6 +644,7 @@ void initialize();
     this._emitDiagnostic('disconnected');
     this._abort?.abort();
     this._acceptResult = null;
+    this._acceptReceipt = null;
     this._root.replaceChildren();
     this._started = false;
   }
