@@ -30,6 +30,15 @@ const KYRANDA_V5_LAYOUT_OVERRIDE = `
 .infobox .alias-section ul {list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:7px}
 .infobox .alias-section li {font:13px/1.5 Georgia,serif;color:#594129;
   background:#eee5d4;border:1px solid #d7c9b3;border-radius:3px;padding:5px 9px}
+.infobox .connections-section {padding:15px 16px;border-bottom:1px solid var(--line);background:#f8f3e9}
+.infobox .connections-section h4 {font:700 11px/1.4 Arial,sans-serif;text-transform:uppercase;
+  letter-spacing:.11em;color:#66553e;margin:0 0 9px}
+.infobox .connections-section ul {list-style:none;padding:0;margin:0}
+.infobox .connections-section li {display:flex;flex-direction:column;gap:2px;padding:5px 0;
+  border-top:1px solid #e2d8c7}
+.infobox .connections-section li:first-child {border-top:0}
+.infobox .connections-section button {text-align:left;align-self:flex-start}
+.infobox .connection-role {font:12px/1.45 Georgia,serif;color:#66553e}
 .infobox.compact-character h3 {padding-bottom:9px;border-bottom:0}
 .infobox .character-kind {margin:0;padding:0 12px 14px;background:#e7dfcf;
   border-bottom:1px solid #c4b9a4;text-align:center;font:700 10px/1.5 Arial,sans-serif;
@@ -498,7 +507,7 @@ function renderDirectory(result) {
   related.replaceChildren();
 }
 
-function renderInfobox(article, linkIndex) {
+function renderInfobox(article, linkIndex, visibleArticles) {
   const isCharacter = ['Player character','Non-player character','Historical character'].includes(article.category);
   infobox.className = isCharacter ? 'infobox compact-character' : 'infobox';
   infobox.replaceChildren(element('h3', '', article.title));
@@ -536,6 +545,33 @@ function renderInfobox(article, linkIndex) {
       section.append(element('h4', '', 'Known aliases'));
       const list = element('ul');
       for (const alias of aliases) list.append(element('li', '', alias));
+      section.append(list);
+      infobox.append(section);
+    }
+    // Relationships were already filtered by the private, episode-aware backend.
+    // Restrict links again to this response's visible article index.
+    const connections = new Map();
+    for (const relation of Array.isArray(article.relationships) ? article.relationships : []) {
+      const slug = relation?.target;
+      if (typeof slug !== 'string' || slug === article.slug ||
+          !visibleArticles.has(slug) || connections.has(slug)) continue;
+      const description = typeof relation.description === 'string' &&
+        relation.description.trim() === relation.description &&
+        relation.description.length <= 120 ? relation.description : '';
+      if (!description) continue;
+      connections.set(slug, {title: visibleArticles.get(slug).title, description});
+    }
+    if (connections.size) {
+      const section = element('section', 'connections-section');
+      section.setAttribute('aria-label', 'Connections');
+      section.append(element('h4', '', 'Connections'));
+      const list = element('ul');
+      for (const [slug, connection] of connections) {
+        const item = element('li');
+        item.append(articleLink(slug, connection.title),
+          element('span', 'connection-role', connection.description));
+        list.append(item);
+      }
       section.append(list);
       infobox.append(section);
     }
@@ -694,10 +730,10 @@ function renderArticle(result) {
   renderArticleNavigation({...article, tableOfContents: visibleContents}, tocLinks);
   activeHeadingIds = tocLinks.map(item => item.id);
   markActiveHeading();
-  renderInfobox(article, linkIndex);
+  const visible = new Map(result.entries.map(entry => [entry.slug, entry]));
+  renderInfobox(article, linkIndex, visible);
   related.replaceChildren();
   const unique = new Map();
-  const visible = new Map(result.entries.map(entry => [entry.slug, entry]));
   for (const entry of [...(article.related || []), ...(article.relationships || [])]) {
     const slug = entry.slug || entry.target;
     if (visible.has(slug) && slug !== article.slug && !unique.has(slug))
