@@ -949,19 +949,29 @@ function renderArticle(result) {
       const reviewActions = element('div', 'inline-pilot-actions');
       const approve = element('button', '', 'Approve privately');
       const reject = element('button', '', 'Reject draft');
+      const applyPreview = element('button', '', 'Apply to staging preview');
+      const revertPreview = element('button', '', 'Revert staging preview');
       const refresh = element('button', '', 'Refresh queue');
       const closeReview = element('button', '', 'Close');
-      for (const actionButton of [approve, reject, refresh, closeReview]) {
+      for (const actionButton of [approve, reject, applyPreview, revertPreview, refresh, closeReview]) {
         actionButton.type = 'button';
         reviewActions.append(actionButton);
       }
       reviewPanel.append(reviewActions);
+      reviewPanel.append(element('p', '',
+        'Staging preview is temporary and visible only in this browser session. It never saves to CMS, changes a release, or publishes. Revert or reload to restore the approved display.'));
       const reviewStatus = element('p', 'inline-pilot-status');
       reviewStatus.setAttribute('role', 'status');
       reviewStatus.setAttribute('aria-live', 'polite');
       reviewPanel.append(reviewStatus);
       let reviewData = null;
       let reviewBusy = false;
+      let previewDraftId = null;
+      let originalParagraphNodes = null;
+      let originalParagraphWhiteSpace = '';
+      const paragraphBlockCount = section.blocks.filter(block => block.type === 'paragraph').length;
+      const previewTarget = () => paragraphBlockCount === 1 &&
+        container.querySelector(':scope > p');
       const selectedDraft = () => reviewData?.drafts.find(item => item.id === selection.value);
       const updateReviewSelection = () => {
         const selected = selectedDraft();
@@ -971,10 +981,18 @@ function renderArticle(result) {
           (selected.authorId !== reviewData.memberId || reviewData.canSelfReview === true);
         const allowed = host.getAttribute('codex-inline-review-enabled') === '1';
         approve.disabled = reject.disabled = !allowed || reviewBusy || !eligible;
+        const previewEligible = allowed && !reviewBusy && !previewDraftId &&
+          selected?.status === 'Approved' && selected?.isLatestForAuthor === true &&
+          fresh && typeof selected.text === 'string' && selected.text.length > 0 &&
+          selected.text.length <= 20000 && Boolean(previewTarget());
+        applyPreview.disabled = !previewEligible;
+        revertPreview.disabled = !allowed || !previewDraftId;
         reason.disabled = !allowed || reviewBusy || !eligible;
         refresh.disabled = reviewBusy;
         if (!selected) reviewStatus.textContent = 'No submission selected.';
         else if (!fresh) reviewStatus.textContent = 'Source revision changed. This draft cannot be reviewed here.';
+        else if (previewDraftId) reviewStatus.textContent =
+          `Session-only staging preview applied from ${previewDraftId.slice(0,8)}. Revert or reload to restore approved text.`;
         else if (selected.status !== 'Pending') reviewStatus.textContent = `Previously ${selected.status}.`;
         else if (!selected.isLatestForAuthor) reviewStatus.textContent = 'Historical draft. Review the author’s latest submission instead.';
         else if (selected.authorId === reviewData.memberId && reviewData.canSelfReview !== true) reviewStatus.textContent = 'You cannot approve or reject your own submission.';
@@ -1017,6 +1035,29 @@ function renderArticle(result) {
         }
       };
       selection.addEventListener('change', updateReviewSelection);
+      applyPreview.addEventListener('click', () => {
+        const selected = selectedDraft();
+        const paragraph = previewTarget();
+        if (applyPreview.disabled || !paragraph || !selected ||
+            selected.status !== 'Approved' || selected.isLatestForAuthor !== true ||
+            selected.baseRevision !== reviewData?.baseRevision || previewDraftId) return;
+        // Retain every original child (including contextual links) for exact DOM rollback.
+        originalParagraphNodes = Array.from(paragraph.childNodes, node => node.cloneNode(true));
+        originalParagraphWhiteSpace = paragraph.style.whiteSpace;
+        paragraph.style.whiteSpace = 'pre-line';
+        paragraph.textContent = selected.text;
+        previewDraftId = selected.id;
+        updateReviewSelection();
+      });
+      revertPreview.addEventListener('click', () => {
+        const paragraph = previewTarget();
+        if (revertPreview.disabled || !paragraph || !previewDraftId || !originalParagraphNodes) return;
+        paragraph.replaceChildren(...originalParagraphNodes.map(node => node.cloneNode(true)));
+        paragraph.style.whiteSpace = originalParagraphWhiteSpace;
+        originalParagraphNodes = null;
+        previewDraftId = null;
+        updateReviewSelection();
+      });
       refresh.addEventListener('click', refreshReviewQueue);
       const decideReview = async decision => {
         const item = selectedDraft();
