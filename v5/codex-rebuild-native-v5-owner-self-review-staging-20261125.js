@@ -353,7 +353,10 @@ host._updateInlinePilot = () => {
   if (inlinePilot.reviewButton) {
     const canReview = host.getAttribute('codex-inline-review-enabled') === '1';
     inlinePilot.reviewButton.hidden = !canReview;
-    if (!canReview) inlinePilot.reviewPanel.hidden = true;
+    if (!canReview) {
+      inlinePilot.revertPreview?.();
+      inlinePilot.reviewPanel.hidden = true;
+    }
   }
   if (!allowed) {
     inlinePilot.panel.hidden = true;
@@ -1049,14 +1052,17 @@ function renderArticle(result) {
         previewDraftId = selected.id;
         updateReviewSelection();
       });
-      revertPreview.addEventListener('click', () => {
+      const restorePreview = () => {
         const paragraph = previewTarget();
-        if (revertPreview.disabled || !paragraph || !previewDraftId || !originalParagraphNodes) return;
+        if (!paragraph || !previewDraftId || !originalParagraphNodes) return;
         paragraph.replaceChildren(...originalParagraphNodes.map(node => node.cloneNode(true)));
         paragraph.style.whiteSpace = originalParagraphWhiteSpace;
         originalParagraphNodes = null;
         previewDraftId = null;
         updateReviewSelection();
+      };
+      revertPreview.addEventListener('click', () => {
+        if (!revertPreview.disabled) restorePreview();
       });
       refresh.addEventListener('click', refreshReviewQueue);
       const decideReview = async decision => {
@@ -1105,7 +1111,7 @@ function renderArticle(result) {
       heading.append(button);
       heading.append(reviewButton);
       container.append(panel, reviewPanel);
-      inlinePilot = {button, panel, text, reviewButton, reviewPanel};
+      inlinePilot = {button, panel, text, reviewButton, reviewPanel, revertPreview:restorePreview};
     }
     for (const block of section.blocks) {
       if (block.type === 'paragraph') {
