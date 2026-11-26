@@ -972,8 +972,8 @@ function renderArticle(result) {
       let previewDraftId = null;
       let originalParagraphNodes = null;
       let originalParagraphWhiteSpace = '';
-      const paragraphBlockCount = section.blocks.filter(block => block.type === 'paragraph').length;
-      const previewTarget = () => paragraphBlockCount === 1 &&
+      const singleParagraphSection = section.blocks.length === 1 && section.blocks[0].type === 'paragraph';
+      const previewTarget = () => singleParagraphSection &&
         container.querySelector(':scope > p');
       const selectedDraft = () => reviewData?.drafts.find(item => item.id === selection.value);
       const updateReviewSelection = () => {
@@ -996,6 +996,8 @@ function renderArticle(result) {
         else if (!fresh) reviewStatus.textContent = 'Source revision changed. This draft cannot be reviewed here.';
         else if (previewDraftId) reviewStatus.textContent =
           `Session-only staging preview applied from ${previewDraftId.slice(0,8)}. Revert or reload to restore approved text.`;
+        else if (selected.status === 'Approved' && !singleParagraphSection) reviewStatus.textContent =
+          'Staging preview supports sections containing exactly one paragraph and no other blocks.';
         else if (selected.status !== 'Pending') reviewStatus.textContent = `Previously ${selected.status}.`;
         else if (!selected.isLatestForAuthor) reviewStatus.textContent = 'Historical draft. Review the author’s latest submission instead.';
         else if (selected.authorId === reviewData.memberId && reviewData.canSelfReview !== true) reviewStatus.textContent = 'You cannot approve or reject your own submission.';
@@ -1003,7 +1005,7 @@ function renderArticle(result) {
       };
       const refreshReviewQueue = async () => {
         reviewBusy = true;
-        approve.disabled = reject.disabled = refresh.disabled = true;
+        approve.disabled = reject.disabled = applyPreview.disabled = refresh.disabled = true;
         reviewStatus.textContent = 'Loading private submissions…';
         try {
           const result = await requestDraft('reviewList');
@@ -1038,24 +1040,47 @@ function renderArticle(result) {
         }
       };
       selection.addEventListener('change', updateReviewSelection);
-      applyPreview.addEventListener('click', () => {
-        const selected = selectedDraft();
-        const paragraph = previewTarget();
-        if (applyPreview.disabled || !paragraph || !selected ||
-            selected.status !== 'Approved' || selected.isLatestForAuthor !== true ||
-            selected.baseRevision !== reviewData?.baseRevision || previewDraftId) return;
-        // Retain every original child (including contextual links) for exact DOM rollback.
-        originalParagraphNodes = Array.from(paragraph.childNodes, node => node.cloneNode(true));
-        originalParagraphWhiteSpace = paragraph.style.whiteSpace;
-        paragraph.style.whiteSpace = 'pre-line';
-        paragraph.textContent = selected.text;
-        previewDraftId = selected.id;
-        updateReviewSelection();
+      applyPreview.addEventListener('click', async () => {
+        if (applyPreview.disabled || reviewBusy || previewDraftId) return;
+        const requestedId = selection.value;
+        reviewBusy = true;
+        applyPreview.disabled = approve.disabled = reject.disabled = refresh.disabled = true;
+        reviewStatus.textContent = 'Rechecking private approval and source revision…';
+        let failureMessage = '';
+        try {
+          const latest = await requestDraft('reviewList');
+          if (!latest?.ok || !Array.isArray(latest.drafts))
+            throw new Error(latest?.message || 'Private review queue could not be verified.');
+          const selected = latest.drafts.find(item => item.id === requestedId);
+          const paragraph = previewTarget();
+          if (host.getAttribute('codex-inline-review-enabled') !== '1' ||
+              selection.value !== requestedId || !paragraph ||
+              !selected || selected.status !== 'Approved' ||
+              selected.isLatestForAuthor !== true ||
+              !Number.isSafeInteger(latest.baseRevision) ||
+              selected.baseRevision !== latest.baseRevision ||
+              typeof selected.text !== 'string' || !selected.text.length ||
+              selected.text.length > 20000 || previewDraftId)
+            throw new Error('Preview eligibility changed. Refresh the private queue and select a current approved draft.');
+          reviewData = latest;
+          // Keep the actual nodes so their contextual-link event listeners survive rollback.
+          originalParagraphNodes = Array.from(paragraph.childNodes);
+          originalParagraphWhiteSpace = paragraph.style.whiteSpace;
+          paragraph.style.whiteSpace = 'pre-line';
+          paragraph.textContent = selected.text;
+          previewDraftId = selected.id;
+        } catch (error) {
+          failureMessage = error?.message || 'Staging preview could not be applied.';
+        } finally {
+          reviewBusy = false;
+          updateReviewSelection();
+          if (failureMessage) reviewStatus.textContent = failureMessage;
+        }
       });
       const restorePreview = () => {
         const paragraph = previewTarget();
         if (!paragraph || !previewDraftId || !originalParagraphNodes) return;
-        paragraph.replaceChildren(...originalParagraphNodes.map(node => node.cloneNode(true)));
+        paragraph.replaceChildren(...originalParagraphNodes);
         paragraph.style.whiteSpace = originalParagraphWhiteSpace;
         originalParagraphNodes = null;
         previewDraftId = null;
