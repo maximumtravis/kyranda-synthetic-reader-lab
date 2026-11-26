@@ -840,17 +840,20 @@ function renderArticle(result) {
       });
       save.addEventListener('click', async () => {
         if (save.disabled) return;
+        const submittedText = text.value;
         busy = true;
+        text.readOnly = true;
         controls();
         draftStatus.textContent = 'Saving private draft…';
         try {
-          const result = await requestDraft('save', {text:text.value, baseRevision});
+          const result = await requestDraft('save', {text:submittedText, baseRevision});
           if (!result?.ok) throw new Error(result?.message || 'Draft storage is unavailable.');
-          baseline = text.value;
+          baseline = submittedText;
           draftStatus.textContent = 'Draft saved for review. The approved article and live website are unchanged.';
         } catch (error) {
           draftStatus.textContent = error?.message || 'Draft not saved. Your text is still here.';
         } finally {
+          text.readOnly = host.getAttribute('codex-inline-edit-enabled') !== '1';
           busy = false;
           controls();
         }
