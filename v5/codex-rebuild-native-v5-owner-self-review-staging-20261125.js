@@ -116,6 +116,17 @@ const KYRANDA_V5_INLINE_PILOT_CSS = `
 .inline-review-panel .review-compare{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:10px 0}
 .inline-review-panel .review-compare textarea{min-height:220px;resize:vertical;font:14px/1.55 Georgia,serif}
 .inline-review-panel .review-compare textarea[readonly]{background:#faf8f3}
+.inline-review-panel .review-mode-switch{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 8px}
+.inline-review-panel .review-mode-switch button{padding:7px 12px;border:1px solid #a58d70;border-radius:3px;background:#fffdfa;font:700 12px Arial,sans-serif}
+.inline-review-panel .review-mode-switch button[aria-pressed="true"]{background:#704b2c;color:white}
+.inline-review-panel .review-diff{border:1px solid #bfb7aa;background:#fffdfa;padding:16px;min-height:140px;white-space:pre-wrap;overflow-wrap:anywhere;font:15px/1.7 Georgia,serif}
+.inline-review-panel .review-diff[hidden],.inline-review-panel .review-compare[hidden]{display:none!important}
+.inline-review-panel .review-diff ins{color:#165b30;background:#d9f1de;text-decoration:none;border-radius:2px}
+.inline-review-panel .review-diff del{color:#902c30;background:#f9dddd;text-decoration:line-through;text-decoration-thickness:1.5px;border-radius:2px}
+.inline-review-panel .review-diff-summary{font:12px/1.5 Arial,sans-serif;color:#514c40;margin:4px 0 8px}
+.inline-review-panel .review-diff-legend{font:12px/1.5 Arial,sans-serif;margin:0 0 8px}
+.inline-review-panel .review-diff-legend ins,.inline-review-panel .review-diff-legend del{padding:3px 6px}
+
 .inline-review-panel .inline-pilot-actions{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
 .inline-review-panel .inline-pilot-actions button{padding:8px 13px;border:1px solid #a58d70;background:#fffdfa;border-radius:3px;font:700 12px Arial,sans-serif}
 .inline-review-panel .inline-pilot-actions button:disabled{opacity:.5}
@@ -353,7 +364,10 @@ host._updateInlinePilot = () => {
   if (inlinePilot.reviewButton) {
     const canReview = host.getAttribute('codex-inline-review-enabled') === '1';
     inlinePilot.reviewButton.hidden = !canReview;
-    if (!canReview) inlinePilot.reviewPanel.hidden = true;
+    if (!canReview) {
+      inlinePilot.revertPreview?.();
+      inlinePilot.reviewPanel.hidden = true;
+    }
   }
   if (!allowed) {
     inlinePilot.panel.hidden = true;
@@ -938,7 +952,37 @@ function renderArticle(result) {
       proposedText.readOnly = true;
       proposedColumn.append(proposedText);
       comparisons.append(currentColumn, proposedColumn);
-      reviewPanel.append(comparisons);
+      const modeSwitch = element('div', 'review-mode-switch');
+      const highlightedMode = element('button', '', 'Highlighted changes');
+      const sideBySideMode = element('button', '', 'Side-by-side text');
+      for (const mode of [highlightedMode, sideBySideMode]) {
+        mode.type = 'button';
+        modeSwitch.append(mode);
+      }
+      const legend = element('p', 'review-diff-legend');
+      const legendAdded = element('ins', '', 'Added');
+      const legendRemoved = element('del', '', 'Removed');
+      legend.append(legendAdded, document.createTextNode('  '), legendRemoved);
+      const diffSummary = element('p', 'review-diff-summary');
+      const diffView = element('div', 'review-diff');
+      diffView.setAttribute('role', 'region');
+      diffView.setAttribute('aria-label', 'Highlighted proposed changes');
+      comparisons.hidden = true;
+      highlightedMode.setAttribute('aria-pressed', 'true');
+      sideBySideMode.setAttribute('aria-pressed', 'false');
+      highlightedMode.addEventListener('click', () => {
+        diffView.hidden = legend.hidden = diffSummary.hidden = false;
+        comparisons.hidden = true;
+        highlightedMode.setAttribute('aria-pressed', 'true');
+        sideBySideMode.setAttribute('aria-pressed', 'false');
+      });
+      sideBySideMode.addEventListener('click', () => {
+        diffView.hidden = legend.hidden = diffSummary.hidden = true;
+        comparisons.hidden = false;
+        highlightedMode.setAttribute('aria-pressed', 'false');
+        sideBySideMode.setAttribute('aria-pressed', 'true');
+      });
+      reviewPanel.append(modeSwitch, legend, diffSummary, diffView, comparisons);
       const reasonLabel = element('label', '', 'Reason (required for rejection)');
       const reason = element('textarea');
       reason.rows = 2;
@@ -949,32 +993,117 @@ function renderArticle(result) {
       const reviewActions = element('div', 'inline-pilot-actions');
       const approve = element('button', '', 'Approve privately');
       const reject = element('button', '', 'Reject draft');
+      const applyPreview = element('button', '', 'Apply to staging preview');
+      const revertPreview = element('button', '', 'Revert staging preview');
       const refresh = element('button', '', 'Refresh queue');
       const closeReview = element('button', '', 'Close');
-      for (const actionButton of [approve, reject, refresh, closeReview]) {
+      for (const actionButton of [approve, reject, applyPreview, revertPreview, refresh, closeReview]) {
         actionButton.type = 'button';
         reviewActions.append(actionButton);
       }
       reviewPanel.append(reviewActions);
+      reviewPanel.append(element('p', '',
+        'Staging preview is temporary and visible only in this browser session. It never saves to CMS, changes a release, or publishes. Revert or reload to restore the approved display.'));
       const reviewStatus = element('p', 'inline-pilot-status');
       reviewStatus.setAttribute('role', 'status');
       reviewStatus.setAttribute('aria-live', 'polite');
       reviewPanel.append(reviewStatus);
       let reviewData = null;
       let reviewBusy = false;
+      let previewDraftId = null;
+      let originalParagraphNodes = null;
+      let originalParagraphWhiteSpace = '';
+      const singleParagraphSection = section.blocks.length === 1 && section.blocks[0].type === 'paragraph';
+      const previewTarget = () => singleParagraphSection &&
+        container.querySelector(':scope > p');
+
+      // Text-only comparison. Never inject draft HTML or mutate the approved article.
+      const diffTokens = value => String(value || '').match(/\s+|[^\s]+/g) || [];
+      const compareDraftText = (before, after, target) => {
+        const old = diffTokens(before);
+        const next = diffTokens(after);
+        let start = 0;
+        while (start < old.length && start < next.length && old[start] === next[start]) start++;
+        let end = 0;
+        while (end < old.length - start && end < next.length - start &&
+               old[old.length - 1 - end] === next[next.length - 1 - end]) end++;
+        const a = old.slice(start, old.length - end);
+        const b = next.slice(start, next.length - end);
+        const edits = [];
+        if (start) edits.push(['same', old.slice(0, start).join('')]);
+        const push = (kind, token) => {
+          const last = edits[edits.length - 1];
+          if (last && last[0] === kind) last[1] += token;
+          else edits.push([kind, token]);
+        };
+        // Bound CPU and memory on unusually long submissions. Normal short
+        // edits receive exact word-level highlighting.
+        if (a.length * b.length <= 1600000) {
+          const width = b.length + 1;
+          const table = new Uint16Array((a.length + 1) * width);
+          for (let i = a.length - 1; i >= 0; i--) {
+            for (let j = b.length - 1; j >= 0; j--) {
+              const at = i * width + j;
+              table[at] = a[i] === b[j] ? 1 + table[at + width + 1] :
+                Math.max(table[at + width], table[at + 1]);
+            }
+          }
+          let i = 0, j = 0;
+          while (i < a.length || j < b.length) {
+            if (i < a.length && j < b.length && a[i] === b[j]) {
+              push('same', a[i++]); j++;
+            } else if (i < a.length &&
+                       (j === b.length || table[(i + 1) * width + j] >= table[i * width + j + 1])) {
+              push('removed', a[i++]);
+            } else {
+              push('added', b[j++]);
+            }
+          }
+        } else {
+          if (a.length) push('removed', a.join(''));
+          if (b.length) push('added', b.join(''));
+        }
+        if (end) push('same', old.slice(old.length - end).join(''));
+        const nodes = edits.filter(([, value]) => value).map(([kind, value]) => {
+          const node = document.createElement(kind === 'added' ? 'ins' :
+            kind === 'removed' ? 'del' : 'span');
+          node.textContent = value;
+          return node;
+        });
+        target.replaceChildren(...nodes);
+        const count = kind => edits.filter(row => row[0] === kind)
+          .reduce((total, row) => total + (row[1].trim().match(/\S+/g) || []).length, 0);
+        return {added:count('added'), removed:count('removed')};
+      };
       const selectedDraft = () => reviewData?.drafts.find(item => item.id === selection.value);
       const updateReviewSelection = () => {
         const selected = selectedDraft();
         proposedText.value = selected?.text || '';
+        const counts = selected ? compareDraftText(originalText, selected.text || '', diffView) :
+          (diffView.replaceChildren(), {added:0, removed:0});
+        diffSummary.textContent = !selected ? 'Choose a submission to compare.' :
+          counts.added || counts.removed ?
+          counts.added + ' added token(s), ' + counts.removed + ' removed token(s).' :
+          'No text changes from the current approved section.';
         const fresh = selected && selected.baseRevision === reviewData.baseRevision;
         const eligible = fresh && selected.status === 'Pending' && selected.isLatestForAuthor &&
           (selected.authorId !== reviewData.memberId || reviewData.canSelfReview === true);
         const allowed = host.getAttribute('codex-inline-review-enabled') === '1';
         approve.disabled = reject.disabled = !allowed || reviewBusy || !eligible;
+        const previewEligible = allowed && !reviewBusy && !previewDraftId &&
+          selected?.status === 'Approved' && selected?.isLatestForAuthor === true &&
+          fresh && typeof selected.text === 'string' && selected.text.length > 0 &&
+          selected.text.length <= 20000 && Boolean(previewTarget());
+        applyPreview.disabled = !previewEligible;
+        revertPreview.disabled = !allowed || !previewDraftId;
         reason.disabled = !allowed || reviewBusy || !eligible;
         refresh.disabled = reviewBusy;
         if (!selected) reviewStatus.textContent = 'No submission selected.';
         else if (!fresh) reviewStatus.textContent = 'Source revision changed. This draft cannot be reviewed here.';
+        else if (previewDraftId) reviewStatus.textContent =
+          `Session-only staging preview applied from ${previewDraftId.slice(0,8)}. Revert or reload to restore approved text.`;
+        else if (selected.status === 'Approved' && !singleParagraphSection) reviewStatus.textContent =
+          'Staging preview supports sections containing exactly one paragraph and no other blocks.';
         else if (selected.status !== 'Pending') reviewStatus.textContent = `Previously ${selected.status}.`;
         else if (!selected.isLatestForAuthor) reviewStatus.textContent = 'Historical draft. Review the author’s latest submission instead.';
         else if (selected.authorId === reviewData.memberId && reviewData.canSelfReview !== true) reviewStatus.textContent = 'You cannot approve or reject your own submission.';
@@ -982,7 +1111,7 @@ function renderArticle(result) {
       };
       const refreshReviewQueue = async () => {
         reviewBusy = true;
-        approve.disabled = reject.disabled = refresh.disabled = true;
+        approve.disabled = reject.disabled = applyPreview.disabled = refresh.disabled = true;
         reviewStatus.textContent = 'Loading private submissions…';
         try {
           const result = await requestDraft('reviewList');
@@ -1017,6 +1146,55 @@ function renderArticle(result) {
         }
       };
       selection.addEventListener('change', updateReviewSelection);
+      applyPreview.addEventListener('click', async () => {
+        if (applyPreview.disabled || reviewBusy || previewDraftId) return;
+        const requestedId = selection.value;
+        reviewBusy = true;
+        applyPreview.disabled = approve.disabled = reject.disabled = refresh.disabled = true;
+        reviewStatus.textContent = 'Rechecking private approval and source revision…';
+        let failureMessage = '';
+        try {
+          const latest = await requestDraft('reviewList');
+          if (!latest?.ok || !Array.isArray(latest.drafts))
+            throw new Error(latest?.message || 'Private review queue could not be verified.');
+          const selected = latest.drafts.find(item => item.id === requestedId);
+          const paragraph = previewTarget();
+          if (host.getAttribute('codex-inline-review-enabled') !== '1' ||
+              selection.value !== requestedId || !paragraph ||
+              !selected || selected.status !== 'Approved' ||
+              selected.isLatestForAuthor !== true ||
+              !Number.isSafeInteger(latest.baseRevision) ||
+              selected.baseRevision !== latest.baseRevision ||
+              typeof selected.text !== 'string' || !selected.text.length ||
+              selected.text.length > 20000 || previewDraftId)
+            throw new Error('Preview eligibility changed. Refresh the private queue and select a current approved draft.');
+          reviewData = latest;
+          // Keep the actual nodes so their contextual-link event listeners survive rollback.
+          originalParagraphNodes = Array.from(paragraph.childNodes);
+          originalParagraphWhiteSpace = paragraph.style.whiteSpace;
+          paragraph.style.whiteSpace = 'pre-line';
+          paragraph.textContent = selected.text;
+          previewDraftId = selected.id;
+        } catch (error) {
+          failureMessage = error?.message || 'Staging preview could not be applied.';
+        } finally {
+          reviewBusy = false;
+          updateReviewSelection();
+          if (failureMessage) reviewStatus.textContent = failureMessage;
+        }
+      });
+      const restorePreview = () => {
+        const paragraph = previewTarget();
+        if (!paragraph || !previewDraftId || !originalParagraphNodes) return;
+        paragraph.replaceChildren(...originalParagraphNodes);
+        paragraph.style.whiteSpace = originalParagraphWhiteSpace;
+        originalParagraphNodes = null;
+        previewDraftId = null;
+        updateReviewSelection();
+      };
+      revertPreview.addEventListener('click', () => {
+        if (!revertPreview.disabled) restorePreview();
+      });
       refresh.addEventListener('click', refreshReviewQueue);
       const decideReview = async decision => {
         const item = selectedDraft();
@@ -1064,7 +1242,7 @@ function renderArticle(result) {
       heading.append(button);
       heading.append(reviewButton);
       container.append(panel, reviewPanel);
-      inlinePilot = {button, panel, text, reviewButton, reviewPanel};
+      inlinePilot = {button, panel, text, reviewButton, reviewPanel, revertPreview:restorePreview};
     }
     for (const block of section.blocks) {
       if (block.type === 'paragraph') {
